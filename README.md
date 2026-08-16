@@ -33,7 +33,9 @@ DSH 助手默认不「看」图片。这个插件把**你本地已有的识图�
 dsh plugin --profile web add "github:TIPSONG/dsh-vision-api-localorweb#main"
 ```
 
-装完重启 web，打开 **设置 → 可接入识图模型 API**：
+> 本插件声明了 `dsh.bundle.patch`，`dsh plugin add` 会自动挂进 profile 层栈，无需手写 insert 行。装完重启 web 生效。
+
+重启后打开 **设置 → 可接入识图模型 API**：
 
 | 字段 | 填什么 | 示例 |
 | --- | --- | --- |
@@ -85,7 +87,7 @@ npm run build          # 产出 lib/index.js + lib/client.js
 dsh plugin --profile web add .
 ```
 
-> 本插件使用 `dsh.client` 声明（`platform: web`）+ `exports["./client"]` 提供浏览器设置页，`main` 提供 Node 工具半。安装后重启 web 生效。
+> 本插件声明 `dsh.bundle.patch`（组合层）+ `dsh.client`（`platform: web`）+ `exports["./client"]`（浏览器设置页），`main` 提供 Node 工具半。安装后重启 web 生效。
 
 ## 🛠 开发
 

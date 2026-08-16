@@ -1,5 +1,5 @@
-# dsh-vision-api-localorweb：向组合挂载 Node half（工具 + settings namespace）。
-# 纯 cordis 插件（未声明 dsh.bundle），经 profile 层栈 insert 行挂载。
+# dsh-vision-api-localorweb：bundle 组合层 —— 向组合挂载自身（Node half：工具 + settings namespace）。
+# 声明于 package.json 的 dsh.bundle.patch，`dsh plugin add` 时自动进入 profile 层栈。
 - insert:
     - id: vision-api
       name: 'dsh-vision-api-localorweb'
