@@ -1,9 +1,10 @@
-# 忽略构建产物
-lib/
 # 依赖
 node_modules/
+
 # 临时文件
 *.log
 .DS_Store
+package-lock.json
+
 # 本地识图配置（不要提交）
 .vision-api-config.json
