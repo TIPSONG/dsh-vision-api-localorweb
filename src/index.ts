@@ -2,35 +2,28 @@
  * dsh-vision-api-localorweb — Host half.
  *
  * Registers:
- *  - a settings namespace `vision-api` (baseUrl / model / apiKey) for durable
- *    configuration, layered over the composition entry config when present;
- *  - the model-facing `local_vision` tool, which reads the resolved config and
+ *  - the model-facing `local_vision` tool, which reads a JSON config file and
  *    calls an OpenAI-compatible vision endpoint. An empty `baseUrl` disables the
  *    feature: the tool returns a "not configured" message instead of calling out.
+ *  - a `webServer` route `GET/POST /api/vision-config` that the browser settings
+ *    page uses to read and persist the same config file.
  *
- * This module targets the rc.6 runtime. It uses the real Cordis APIs (no
- * dynamic-sandbox `harness.*` helpers): `ctx.tools.register(defineTool(...))`,
- * `ctx.inject(['settings'], ...)`, and the `settings`/`tools`/`fs` services.
+ * Configuration is persisted to a JSON file (not the settings namespace), because
+ * the rc.6 api-proxy only exposes a hard-coded allowlist of settings namespaces to
+ * the browser — a third-party namespace would answer `settings-not-exposed` and the
+ * page's save button would silently no-op. A file under the DSH home survives
+ * restarts and workspaces without touching that allowlist.
  */
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
-import z from '@deepseek-ai/schemastery'
-
-/** Settings namespace owned by this plugin (lowercase kebab-case). */
-const NS = settingsNamespace('vision-api')
-
-/** Durable config schema — also the wire envelope the browser scope validates. */
-const VisionConfigSchema = z.object({
-  baseUrl: z.string().default(''),
-  model: z.string().default(''),
-  apiKey: z.string().default(''),
-})
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { join, dirname } from 'node:path'
+import { homedir } from 'node:os'
 
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'vision-api'
 
-/** Hard dependency: the tool registry. `settings` and `fs` are optional (degraded below). */
-export const inject = ['tools']
+/** Hard dependencies: tool registry and the web route carrier. */
+export const inject = ['tools', 'webServer']
 
 /** Default model name, used when the user leaves the field blank. */
 const DEFAULT_MODEL = 'gemma-4-e4b'
@@ -41,16 +34,8 @@ const MAX_IMAGE_BYTES = 15 * 1024 * 1024
 /** Cooperative tool-call budget: the vision model is slow, be generous. */
 const TOOL_TIMEOUT_MS = 300_000
 
-/** Map a file path to a vision MIME type from its extension. */
-function mimeOf(path: string): string {
-  const p = path.toLowerCase()
-  if (p.endsWith('.jpg') || p.endsWith('.jpeg')) return 'image/jpeg'
-  if (p.endsWith('.png')) return 'image/png'
-  if (p.endsWith('.webp')) return 'image/webp'
-  if (p.endsWith('.gif')) return 'image/gif'
-  if (p.endsWith('.bmp')) return 'image/bmp'
-  return 'image/png'
-}
+/** HTTP route path shared with the client half. */
+const CONFIG_ROUTE = '/api/vision-config'
 
 /** Resolved, de-branded view of the durable config. */
 interface VisionConfig {
@@ -68,6 +53,39 @@ function readConfig(value: unknown): VisionConfig {
     model: typeof v.model === 'string' ? v.model.trim() : '',
     apiKey: typeof v.apiKey === 'string' ? v.apiKey.trim() : '',
   }
+}
+
+/** Absolute path of the JSON config file, under the DSH home when resolvable. */
+function configFilePath(): string {
+  const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
+  return join(dshHome, 'vision-api-config.json')
+}
+
+/** Read the config file; a missing or malformed file resolves to empty. */
+async function loadConfig(): Promise<VisionConfig> {
+  try {
+    return readConfig(JSON.parse(await readFile(configFilePath(), 'utf8')))
+  } catch {
+    return { baseUrl: '', model: '', apiKey: '' }
+  }
+}
+
+/** Persist the config file (creating parent directories as needed). */
+async function saveConfig(cfg: VisionConfig): Promise<void> {
+  const path = configFilePath()
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, JSON.stringify(cfg, null, 2) + '\n', 'utf8')
+}
+
+/** Map a file path to a vision MIME type from its extension. */
+function mimeOf(path: string): string {
+  const p = path.toLowerCase()
+  if (p.endsWith('.jpg') || p.endsWith('.jpeg')) return 'image/jpeg'
+  if (p.endsWith('.png')) return 'image/png'
+  if (p.endsWith('.webp')) return 'image/webp'
+  if (p.endsWith('.gif')) return 'image/gif'
+  if (p.endsWith('.bmp')) return 'image/bmp'
+  return 'image/png'
 }
 
 /**
@@ -131,23 +149,45 @@ async function callVision(
   return `本地模型未返回有效内容 (finish_reason=${choice.finish_reason ?? ''})。`
 }
 
+/** Read the JSON body of an incoming request (bounded). */
+async function readJsonBody(req: any): Promise<unknown> {
+  const chunks: Buffer[] = []
+  for await (const chunk of req) chunks.push(chunk as Buffer)
+  const raw = Buffer.concat(chunks).toString('utf8')
+  if (raw.length === 0) return undefined
+  return JSON.parse(raw)
+}
+
 /**
- * Register the settings namespace and the `local_vision` tool.
- *
- * `settings` is optional: the durable config is layered under the composition
- * entry's `config` (the `base` layer). When the settings provider is absent —
- * or the user leaves `baseUrl` blank — the tool reports "not configured".
+ * Register the `local_vision` tool and the config route.
  */
 export function apply(ctx: any, config: unknown): void {
   const entryConfig = readConfig(config)
 
-  // Optional settings injection: register the durable namespace whenever a
-  // settings provider exists, and keep the live scope for the tool to read.
-  let settingsScope: { get(): unknown } | undefined
-  ctx.inject(['settings'], (settingsCtx: any) => {
-    settingsScope = settingsCtx.settings.register(NS, VisionConfigSchema, {
-      base: { ...entryConfig },
-    })
+  // Register the browser-facing config route (GET read / POST write).
+  ctx.webServer.register({
+    kind: 'exact',
+    path: CONFIG_ROUTE,
+    handler: async (req: any, res: any) => {
+      try {
+        if (req.method === 'GET') {
+          const cfg = await loadConfig()
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(cfg))
+        } else if (req.method === 'POST') {
+          const body = readConfig(await readJsonBody(req))
+          await saveConfig(body)
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(body))
+        } else {
+          res.writeHead(405, { allow: 'GET, POST' })
+          res.end('method not allowed')
+        }
+      } catch (error) {
+        res.writeHead(400, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+      }
+    },
   })
 
   ctx.tools.register(
@@ -172,28 +212,24 @@ export function apply(ctx: any, config: unknown): void {
       },
       timeoutMs: TOOL_TIMEOUT_MS,
       async execute(args: any, exec: any): Promise<string> {
-        const cfg = settingsScope ? readConfig(settingsScope.get()) : entryConfig
-        if (!cfg.baseUrl) {
+        // File is authoritative; fall back to the composition entry config when
+        // the file has never been written.
+        const cfg = await loadConfig()
+        const effective = cfg.baseUrl || cfg.model || cfg.apiKey ? cfg : entryConfig
+        if (!effective.baseUrl) {
           return '未配置识图模型 API。请在 设置 → 可接入识图模型 API 中填写接口地址（地址留空即不启用识图模型）。'
         }
 
-        // Read the image bytes. Use the injected `fs` service when present so
-        // the read observes the harness filesystem policy; fall back to Node's
-        // global fetch for the HTTP call (present in the rc.6 runtime).
-        const fs = ctx.get('fs')
         let bytes: Uint8Array
-        if (fs && typeof fs.readBytes === 'function') {
-          const target = await fs.resolve(args.image_path)
-          bytes = await fs.readBytes(target, exec.signal, MAX_IMAGE_BYTES)
-        } else {
-          const { readFile } = await import('node:fs/promises')
-          const buf = await readFile(args.image_path)
-          bytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
+        const buf = await readFile(args.image_path)
+        bytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
+        if (bytes.byteLength > MAX_IMAGE_BYTES) {
+          throw new Error(`图片超过 ${MAX_IMAGE_BYTES} 字节上限。`)
         }
 
         const b64 = bytesToBase64(bytes)
         const mime = mimeOf(args.image_path)
-        return callVision(cfg, b64, mime, args.question, exec.signal, fetch)
+        return callVision(effective, b64, mime, args.question, exec.signal, fetch)
       },
     }),
   )
