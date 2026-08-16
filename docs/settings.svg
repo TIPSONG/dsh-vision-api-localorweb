@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="640" viewBox="0 0 1080 640">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f1117"/>
+      <stop offset="1" stop-color="#161a24"/>
+    </linearGradient>
+  </defs>
+  <rect width="1080" height="640" fill="url(#bg)"/>
+  <text x="60" y="80" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="30" font-weight="700" fill="#f2f4f8">可接入识图模型 API</text>
+  <text x="60" y="120" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16" fill="#8b93a5">配置本地识图模型接口后，助手识别图片时会调用它。接口地址留空则不使用识图模型。</text>
+
+  <rect x="60" y="160" width="960" height="420" rx="14" fill="#181b25" stroke="#262b38"/>
+
+  <text x="96" y="206" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="15" font-weight="600" fill="#e6e9f0">接口地址</text>
+  <rect x="96" y="220" width="888" height="44" rx="8" fill="#0b0d13" stroke="#333a4a"/>
+  <text x="112" y="248" font-family="Consolas, monospace" font-size="16" fill="#7dd3fc">http://localhost:1234/v1</text>
+  <text x="96" y="286" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="12" fill="#6b7280">OpenAI 兼容接口的 base URL，留空表示不启用识图模型。</text>
+
+  <text x="96" y="330" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="15" font-weight="600" fill="#e6e9f0">模型名</text>
+  <rect x="96" y="344" width="888" height="44" rx="8" fill="#0b0d13" stroke="#333a4a"/>
+  <text x="112" y="372" font-family="Consolas, monospace" font-size="16" fill="#a5b4fc">gemma-4-e4b</text>
+  <text x="96" y="410" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="12" fill="#6b7280">如 LM Studio 里加载的模型 ID。</text>
+
+  <text x="96" y="454" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="15" font-weight="600" fill="#e6e9f0">API Key（可选）</text>
+  <rect x="96" y="468" width="888" height="44" rx="8" fill="#0b0d13" stroke="#333a4a"/>
+  <text x="112" y="496" font-family="Consolas, monospace" font-size="16" fill="#6b7280">••••••••</text>
+  <text x="96" y="534" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="12" fill="#6b7280">本地服务通常无需填写；留空则不发送鉴权头。</text>
+
+  <rect x="96" y="556" width="110" height="40" rx="8" fill="#4f46e5"/>
+  <text x="126" y="582" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="15" font-weight="600" fill="#ffffff">保存</text>
+</svg>
