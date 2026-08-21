@@ -23,7 +23,7 @@ import { homedir } from 'node:os'
 export const name = 'vision-api'
 
 /** Hard dependencies: tool registry and the web route carrier. */
-export const inject = ['tools', 'webServer']
+export const inject = ['tools', 'webServer', 'systemPrompt']
 
 /** Default model name, used when the user leaves the field blank. */
 const DEFAULT_MODEL = 'gemma-4-e4b'
@@ -159,10 +159,60 @@ async function readJsonBody(req: any): Promise<unknown> {
 }
 
 /**
- * Register the `local_vision` tool and the config route.
+ * True when one content block tree contains an image block, walking nested
+ * tool-result content (the same recursion the LLM runtime uses).
+ */
+function contentHasImage(blocks: any[]): boolean {
+  return blocks.some((block) => block.type === 'image' || (block.type === 'tool-result' && contentHasImage(block.content ?? [])))
+}
+
+/**
+ * Translate every image block in a content tree into a text description
+ * produced by the locally configured vision model. Non-image blocks pass
+ * through untouched. Failures degrade to a stable placeholder instead of
+ * breaking the step.
+ */
+async function translateContentBlocks(
+  blocks: any[],
+  translateImage: (ref: any) => Promise<string>,
+): Promise<any[]> {
+  const out: any[] = []
+  for (const block of blocks) {
+    if (block.type === 'image') {
+      let text: string
+      try {
+        text = await translateImage(block.attachment)
+      } catch (error) {
+        text = `[图片存在，但本地识图模型暂不可用：${error instanceof Error ? error.message : String(error)}]`
+      }
+      out.push({ type: 'text', text: `[图片内容（本地识图模型描述）]\n${text}` })
+    } else if (block.type === 'tool-result') {
+      const content = await translateContentBlocks(block.content ?? [], translateImage)
+      out.push({ ...block, content })
+    } else {
+      out.push(block)
+    }
+  }
+  return out
+}
+
+/**
+ * Register the `local_vision` tool, the config route, and the image
+ * pre-translation hook. The hook bridges a text-only conversation model
+ * (e.g. deepseek-v4) and the local vision model: before each model step,
+ * image blocks in the pending messages are replaced with text descriptions,
+ * so a model that cannot see images still understands them.
  */
 export function apply(ctx: any, config: unknown): void {
   const entryConfig = readConfig(config)
+
+  // Guidance: when the conversation model cannot see images itself, route
+  // image questions through the local vision tool instead of read_image.
+  ctx.systemPrompt.section({
+    name: 'vision-api',
+    order: 150,
+    text: '当前对话模型可能不支持直接读取图片。当你需要理解图片内容时，使用 local_vision 工具（它会把图片交给本地识图模型并返回文字描述）；不要使用 read_image 工具，它可能报错「不支持视图」。',
+  })
 
   // Register the browser-facing config route (GET read / POST write).
   ctx.webServer.register({
@@ -188,6 +238,59 @@ export function apply(ctx: any, config: unknown): void {
         res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
       }
     },
+  })
+
+  // Image pre-translation: when the conversation route cannot accept images,
+  // turn pending image blocks into local-model text descriptions first.
+  ctx.on('agent/pre-step', async (payload: any, next: any) => {
+    const decision = await next()
+    if (decision?.kind !== 'enter') return decision
+
+    const messages: any[] = decision.messages ?? []
+    if (!messages.some((message) => contentHasImage(message.content ?? []))) return decision
+
+    const cfg = await loadConfig()
+    if (!cfg.baseUrl) return decision
+
+    const llm = ctx.get('llm')
+    const attachments = ctx.get('attachments')
+    if (!llm || !attachments) return decision
+
+    // Skip translation when the routed model already accepts images.
+    const provider = payload.agent?.options?.provider
+    const model = payload.agent?.options?.model
+    let supportsImage = false
+    if (provider && model) {
+      try {
+        const info = await llm.resolveModelInfo(provider, model, payload.signal)
+        supportsImage = Array.isArray(info.inputModalities) && info.inputModalities.includes('image')
+      } catch {
+        /* unknown route: fall through and translate */
+      }
+    }
+    if (supportsImage) return decision
+
+    const cache = new Map<string, string>()
+    const translateImage = async (ref: any) => {
+      const key = String(ref?.attachmentId ?? '')
+      if (cache.has(key)) return cache.get(key)!
+      const stored = await attachments.readImage(ref, payload.signal)
+      const b64 = bytesToBase64(stored.data)
+      const text = await callVision(cfg, b64, stored.ref.mediaType, undefined, payload.signal, fetch)
+      cache.set(key, text)
+      return text
+    }
+
+    let translated: any[]
+    try {
+      translated = await Promise.all(messages.map(async (message) => ({
+        ...message,
+        content: await translateContentBlocks(message.content ?? [], translateImage),
+      })))
+    } catch {
+      return decision
+    }
+    return { kind: 'enter', messages: translated }
   })
 
   ctx.tools.register(
