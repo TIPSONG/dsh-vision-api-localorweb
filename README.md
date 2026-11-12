@@ -51,7 +51,7 @@ dsh plugin --profile web add "github:TIPSONG/dsh-vision-api-localorweb#main"
 
 把图片放在本地磁盘上，然后在对话里**给出图片路径**，例如：
 
-> 看看这张图：`C:\Users\me\Desktop\photo.png`，描述一下内容
+> 看看这张图：`C:\Users\Example\Desktop\photo.png`，描述一下内容
 
 助手会调用 `local_vision` 工具读取该路径的图片、交给本地识图模型，并把文字描述带回来。**这条路不依赖对话模型是否支持图片输入**——哪怕对话模型是纯文本模型（如 deepseek-v4），识图也完全正常。
 
